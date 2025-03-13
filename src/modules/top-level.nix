@@ -1,4 +1,4 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, inputs, ... }:
 let
   types = lib.types;
   # Returns a list of all the entries in a folder
@@ -58,6 +58,21 @@ in
       type = types.lines;
       description = "Bash code to execute when entering the shell.";
       default = "";
+    };
+
+    overlays = lib.mkOption {
+      type = types.listOf (types.functionTo (types.functionTo types.attrs));
+      description = "List of overlays to apply to pkgs. Each overlay is a function that takes two arguments: final and prev.";
+      default = [ ];
+      example = lib.literalExpression ''
+        [
+          (final: prev: {
+            hello = prev.hello.overrideAttrs (oldAttrs: {
+              patches = (oldAttrs.patches or []) ++ [ ./hello-fix.patch ];
+            });
+          })
+        ]
+      '';
     };
 
     packages = lib.mkOption {
@@ -311,6 +326,25 @@ in
 
     infoSections."env" = lib.mapAttrsToList (name: value: "${name}: ${toString value}") config.env;
     infoSections."packages" = builtins.map (package: package.name) (builtins.filter (package: !(builtins.elem package.name (builtins.attrNames config.scripts))) config.packages);
+
+    _module.args.pkgs = import pkgs.path {
+      system = pkgs.stdenv.hostPlatform.system;
+      config = pkgs.config // {
+        overlays =
+          let
+            getOverlays = inputName: inputAttrs:
+              map
+                (overlay:
+                  let
+                    input = inputs.${inputName} or (throw "No such input `${inputName}` while trying to configure overlays.");
+                  in
+                    input.overlays.${overlay} or (throw "Input `${inputName}` has no overlay called `${overlay}`. Supported overlays: ${lib.concatStringsSep ", " (builtins.attrNames input.overlays)}"))
+                inputAttrs.overlays or [ ];
+            overlays = lib.flatten (lib.mapAttrsToList getOverlays inputs);
+          in
+          pkgs.config.overlays ++ overlays ++ config.overlays;
+      };
+    };
 
     ci = [ config.shell ];
     ciDerivation = pkgs.runCommand "ci" { } "echo ${toString config.ci} > $out";
